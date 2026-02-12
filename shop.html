@@ -239,91 +239,196 @@
             if (confirm(`Mark order as ${status}?`)) {
                 try {
                     await updateOrderStatus(orderId, status);
-                    const allOrders = await getOrders(null);
-                    console.log("Shop Dashboard Fetched Orders:", allOrders);
-                    const foodItems = await getFoodItems();
-
-                    const time = new Date().toLocaleTimeString();
-                    const updateSpan = document.getElementById('lastUpdated');
-                    if (updateSpan) updateSpan.innerText = "Last updated: " + time; {
-                        console.error(e);
-                        alert('Error updating order: ' + e.message);
-                    }
-                }
-        }
-
-            window.toggleStock = async function (itemId, currentStatus) {
-                const newStatus = currentStatus === 'In Stock' ? 'Out of Stock' : 'In Stock';
-                if (confirm(`Change status to ${newStatus}?`)) {
-                    try {
-                        await updateFoodItem(itemId, { status: newStatus });
-                        renderDashboard();
-                    } catch (e) {
-                        console.error(e);
-                        alert('Error updating stock: ' + e.message);
-                    }
+                    // Re-render will happen automatically via next interval, or we can force it
+                    renderDashboard();
+                } catch (e) {
+                    console.error(e);
+                    alert('Error updating order: ' + e.message);
                 }
             }
+        }
 
-            onAuthStateChanged(auth, async (user) => {
-                if (!user) {
-                    window.location.href = 'index.html';
-                    return;
+        window.toggleStock = async function (itemId, currentStatus) {
+            const newStatus = currentStatus === 'In Stock' ? 'Out of Stock' : 'In Stock';
+            if (confirm(`Change status to ${newStatus}?`)) {
+                try {
+                    await updateFoodItem(itemId, { status: newStatus });
+                    renderDashboard();
+                } catch (e) {
+                    console.error(e);
+                    alert('Error updating stock: ' + e.message);
+                }
+            }
+        }
+
+        onAuthStateChanged(auth, async (user) => {
+            if (!user) {
+                window.location.href = 'index.html';
+                return;
+            }
+
+            // Strict Shopkeeper Check
+            let isShop = false;
+            // Admin can also access shop
+            if (user.email === 'shop@chicken.com' || user.email === 'admin@chicken.com') isShop = true;
+            else {
+                const snap = await getDoc(doc(db, "users", user.uid));
+                if (snap.exists() && (snap.data().role === 'shopkeeper' || snap.data().role === 'admin')) isShop = true;
+            }
+
+            if (!isShop) {
+                alert("Access Denied: Shopkeepers Only");
+                window.location.href = 'client.html';
+                return;
+            }
+
+            // Initial Render
+            renderDashboard();
+
+            // Auto-refresh every 10 seconds
+            setInterval(renderDashboard, 10000);
+        });
+
+        async function renderDashboard() {
+            try {
+                // 1. Fetch Data
+                const allOrders = await getOrders(null);
+                const foodItems = await getFoodItems();
+
+                // Debug Log
+                console.log("Shop Dashboard Fetched Orders:", allOrders);
+
+                // Update Timestamp
+                const time = new Date().toLocaleTimeString();
+                const updateSpan = document.getElementById('lastUpdated');
+                if (updateSpan) updateSpan.innerText = "Last updated: " + time;
+
+                // 2. Process Stats
+                const todayOrders = allOrders.filter(o => {
+                    const date = new Date(o.timestamp);
+                    const today = new Date();
+                    return date.getDate() === today.getDate() &&
+                        date.getMonth() === today.getMonth() &&
+                        date.getFullYear() === today.getFullYear();
+                });
+
+                const revenue = todayOrders.reduce((sum, o) => sum + o.total, 0);
+                const pending = allOrders.filter(o => o.status !== 'Delivered' && o.status !== 'Cancelled').length;
+                const lowStock = foodItems.filter(i => i.status === 'Out of Stock').length;
+
+                // Update UI Stats
+                const stats = document.querySelectorAll('dd');
+                if (stats.length >= 4) {
+                    stats[0].innerText = todayOrders.length;
+                    stats[1].innerText = '₹' + revenue.toFixed(0);
+                    stats[2].innerText = pending;
+                    stats[3].innerText = lowStock;
                 }
 
-                // Strict Shopkeeper Check
-                let isShop = false;
-                // Admin can also access shop
-                if (user.email === 'shop@chicken.com' || user.email === 'admin@chicken.com') isShop = true;
-                else {
-                    const snap = await getDoc(doc(db, "users", user.uid));
-                    if (snap.exists() && (snap.data().role === 'shopkeeper' || snap.data().role === 'admin')) isShop = true;
+                // 3. Render Live Orders
+                const activeOrders = allOrders.filter(o => o.status !== 'Delivered' && o.status !== 'Cancelled').reverse();
+                const list = document.querySelector('ul.divide-y');
+
+                // Add ID for navigation (Safety check)
+                const liveOrdersTitle = document.querySelector('h2.text-lg.font-medium.text-gray-900.mb-4');
+                if (liveOrdersTitle) liveOrdersTitle.id = 'orders';
+
+                if (list) {
+                    if (activeOrders.length === 0) {
+                        list.innerHTML = '<li class="p-4 text-center text-gray-500">No active orders</li>';
+                    } else {
+                        list.innerHTML = activeOrders.map(order => `
+                            <li>
+                                <div class="px-4 py-4 sm:px-6 hover:bg-gray-50 transition">
+                                    <div class="flex items-center justify-between">
+                                        <p class="text-sm font-medium text-primary truncate">
+                                            Order #${order.id.toString().slice(0, 6)}
+                                        </p>
+                                        <div class="ml-2 flex-shrink-0 flex">
+                                            <p class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                                                ${order.status === 'Order Placed' ? 'bg-yellow-100 text-yellow-800' :
+                                order.status === 'Preparing' ? 'bg-blue-100 text-blue-800' :
+                                    'bg-green-100 text-green-800'}">
+                                                ${order.status}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div class="mt-2 sm:flex sm:justify-between">
+                                        <div class="sm:flex">
+                                            <p class="flex items-center text-sm text-gray-500">
+                                                <i data-lucide="user" class="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400"></i>
+                                                ${order.clientEmail || 'Client'}
+                                            </p>
+                                        </div>
+                                        <div class="mt-2 flex items-center text-sm text-gray-500 sm:mt-0">
+                                            <i data-lucide="clock" class="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400"></i>
+                                            <p>${new Date(order.timestamp).toLocaleTimeString()}</p>
+                                        </div>
+                                    </div>
+                                    <div class="mt-2">
+                                         <p class="text-sm text-gray-600 font-medium">
+                                            ${order.items.map(i => `${i.quantity}x ${i.name}`).join(', ')}
+                                         </p>
+                                         <p class="text-xs text-gray-400 mt-1">Total: ₹${order.total}</p>
+                                    </div>
+                                    <div class="mt-4 flex gap-2">
+                                        ${order.status === 'Order Placed' ?
+                                `<button onclick="updateStatus('${order.id}', 'Preparing')" class="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600 transition-colors shadow">Accept & Cook</button>` : ''}
+                                        ${order.status === 'Preparing' ?
+                                `<button onclick="updateStatus('${order.id}', 'Delivered')" class="bg-green-500 text-white px-3 py-1 rounded text-sm hover:bg-green-600 transition-colors shadow">Mark Delivered</button>` : ''}
+                                        <button onclick="updateStatus('${order.id}', 'Cancelled')" class="bg-gray-200 text-gray-700 px-3 py-1 rounded text-sm hover:bg-gray-300 transition-colors">Reject</button>
+                                    </div>
+                                </div>
+                            </li>
+                        `).join('');
+                    }
                 }
 
-                if (!isShop) {
-                    alert("Access Denied: Shopkeepers Only");
-                    window.location.href = 'client.html';
-                    return;
+                // 4. Render Stock Table
+                const stockBody = document.querySelector('tbody');
+                const stockTitle = document.querySelectorAll('h2.text-lg')[1]; // Second h2
+                if (stockTitle) stockTitle.id = 'products';
+
+                if (stockBody) {
+                    stockBody.innerHTML = foodItems.map(item => `
+                        <tr>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <div class="flex items-center">
+                                    <div class="flex-shrink-0 h-10 w-10">
+                                        <img class="h-10 w-10 rounded-full object-cover" src="${item.image}" alt="">
+                                    </div>
+                                    <div class="ml-4">
+                                        <div class="text-sm font-medium text-gray-900">${item.name}</div>
+                                        <div class="text-sm text-gray-500">${item.rating} ★</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <div class="text-sm text-gray-900">₹${item.price}</div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                                    ${item.status === 'Out of Stock' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}">
+                                    ${item.status || 'In Stock'}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                <button onclick="toggleStock('${item.id}', '${item.status || 'In Stock'}')" 
+                                    class="text-primary hover:text-red-900 font-bold border border-red-100 px-3 py-1 rounded hover:bg-red-50 transition">
+                                    ${item.status === 'Out of Stock' ? 'Restock' : 'Mark Out'}
+                                </button>
+                            </td>
+                        </tr>
+                    `).join('');
                 }
 
-                renderDashboard();
+                // Re-init icons
+                if (window.lucide) lucide.createIcons();
 
-                // Auto-refresh
-                setInterval(renderDashboard, 10000);
-            });
-
-            async function renderDashboard() {
-                date.getMonth() === today.getMonth() &&
-                    date.getFullYear() === today.getFullYear();
-            });
-
-            const revenue = todayOrders.reduce((sum, o) => sum + o.total, 0);
-            const pending = allOrders.filter(o => o.status !== 'Delivered' && o.status !== 'Cancelled').length;
-            const lowStock = foodItems.filter(i => i.status === 'Out of Stock').length;
-
-            // Update UI Stats
-            document.querySelectorAll('dd')[0].innerText = todayOrders.length;
-            document.querySelectorAll('dd')[1].innerText = '₹' + revenue.toFixed(0);
-            document.querySelectorAll('dd')[2].innerText = pending;
-            document.querySelectorAll('dd')[3].innerText = lowStock;
-
-            // 3. Render Live Orders
-            const activeOrders = allOrders.filter(o => o.status !== 'Delivered' && o.status !== 'Cancelled').reverse();
-            const list = document.querySelector('ul.divide-y');
-
-            // Add ID for navigation
-            const liveOrdersTitle = document.querySelector('h2.text-lg.font-medium.text-gray-900.mb-4'); // First h2
-            if (liveOrdersTitle) liveOrdersTitle.id = 'orders';
-
-            if (list) {
-                if (activeOrders.length === 0) {
-                    list.innerHTML = '<li class="p-4 text-center text-gray-500">No active orders</li>';
-                } else {
-                    list.innerHTML = activeOrders.map(order => `
-                        <li>
-                            <div class="px-4 py-4 sm:px-6 hover:bg-gray-50 transition">
-                                <div class="flex items-center justify-between">
-        lucide.createIcons();
+            } catch (err) {
+                console.error("Dashboard Render Error:", err);
+            }
+        }
     </script>
 </body>
 
