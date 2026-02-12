@@ -46,6 +46,7 @@
             </div>
 
             <div class="flex items-center gap-4">
+                <span id="userDisplayName" class="hidden md:block font-semibold text-gray-700"></span>
                 <div class="relative cursor-pointer" onclick="toggleCart()">
                     <span class="material-icons-round text-3xl text-gray-700">shopping_cart</span>
                     <span id="cartCount"
@@ -139,267 +140,229 @@
     </div>
 
     <script src="script.js"></script>
-    <script>
-        const user = checkSession('client');
-        let cart = {};
+    <script type="module">
+        import { auth, onAuthStateChanged, signOut } from './firebase-config.js';
+        import { getFoodItems, placeOrder, getOrders } from './db-service.js';
 
-        // Load cart from local storage specifically for this user
-        function loadCart() {
-            const allCarts = getData('cart') || {};
-            cart = allCarts[user.username] || {};
-            updateCartUI();
-        }
+        // --- Global Helpers for HTML attributes ---
+        window.logout = () => {
+            signOut(auth).then(() => window.location.href = 'index.html');
+        };
 
-        function saveCart() {
-            const allCarts = getData('cart') || {};
-            allCarts[user.username] = cart;
-            setData('cart', allCarts);
-            updateCartUI();
-        }
+        (async function () {
+            // Wait for Auth
+            onAuthStateChanged(auth, async (user) => {
+                if (!user) {
+                    window.location.href = 'login.html';
+                    return;
+                }
+                console.log("Client logged in:", user.email);
 
-        function renderMenu() {
-            const items = getData('foodItems');
-            const grid = document.getElementById('menuGrid');
-            const search = document.getElementById('searchInput').value.toLowerCase();
+                // Display Name
+                const nameSpan = document.getElementById('userDisplayName');
+                if (nameSpan) nameSpan.innerText = `Hi, ${user.displayName || 'Foodie'}`;
 
-            grid.innerHTML = items
-                .filter(item => item.name.toLowerCase().includes(search))
-                .map(item => `
-                <div class="bg-white rounded-2xl shadow hover:shadow-xl transition duration-300 overflow-hidden group">
-                    <div class="relative h-48 overflow-hidden">
-                        <img src="${item.image}" alt="${item.name}" class="w-full h-full object-cover group-hover:scale-110 transition duration-500">
-                        <div class="absolute top-2 right-2 bg-white px-2 py-1 rounded-lg shadow text-xs font-bold flex items-center gap-1">
-                            <span class="text-yellow-500 material-icons-round text-sm">star</span> ${item.rating}
-                        </div>
-                    </div>
-                    <div class="p-4">
-                        <h4 class="font-bold text-lg text-gray-800 mb-1 truncate">${item.name}</h4>
-                        <div class="flex justify-between items-center mt-3">
-                            <span class="text-xl font-bold text-brand-red">₹${item.price}</span>
-                            <button onclick="addToCart(${item.id})" class="bg-brand-red text-white p-2 rounded-full shadow-lg hover:bg-black transition active:scale-95">
-                                <span class="material-icons-round text-sm">add</span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            `).join('');
+                // Initialize App Data
+                await initClientApp(user);
+            });
 
-            if (grid.innerHTML === '') grid.innerHTML = '<p class="col-span-full text-center text-gray-500 py-10">No items found.</p>';
-        }
+            // --- App Logic ---
+            let cart = {};
+            let currentUser = null;
 
-        function addToCart(id) {
-            const items = getData('foodItems');
-            const item = items.find(i => i.id === id);
+            async function initClientApp(user) {
+                currentUser = user;
+                loadCart(); // Keep cart local for now
+                await renderMenu();
+                await renderOrders();
 
-            if (cart[id]) {
-                cart[id].quantity++;
-            } else {
-                cart[id] = { ...item, quantity: 1 };
+                // Auto refresh orders every 10 seconds
+                setInterval(renderOrders, 10000);
             }
-            saveCart();
-            showToast('Added to cart!');
-        }
 
-        function removeFromCart(id) {
-            delete cart[id];
-            saveCart();
-        }
+            // Cart Logic (Local Storage)
+            window.loadCart = function () {
+                const allCarts = JSON.parse(localStorage.getItem('cart')) || {};
+                cart = allCarts[currentUser.uid] || {};
+                updateCartUI();
+            }
 
-        function updateQuantity(id, change) {
-            if (cart[id].quantity + change <= 0) {
-                removeFromCart(id);
-            } else {
-                cart[id].quantity += change;
+            window.saveCart = function () {
+                const allCarts = JSON.parse(localStorage.getItem('cart')) || {};
+                allCarts[currentUser.uid] = cart;
+                localStorage.setItem('cart', JSON.stringify(allCarts));
+                updateCartUI();
+            }
+
+            // Menu Logic (Firestore)
+            window.renderMenu = async function () {
+                const search = document.getElementById('searchInput').value.toLowerCase();
+                const grid = document.getElementById('menuGrid');
+                grid.innerHTML = '<p class="col-span-full text-center py-10">Loading menu...</p>';
+
+                const items = await getFoodItems();
+
+                grid.innerHTML = items
+                    .filter(item => item.name.toLowerCase().includes(search))
+                    .map(item => `
+                    <div class="bg-white rounded-2xl shadow hover:shadow-xl transition duration-300 overflow-hidden group">
+                        <div class="relative h-48 overflow-hidden">
+                            <img src="${item.image}" alt="${item.name}" class="w-full h-full object-cover group-hover:scale-110 transition duration-500">
+                            <div class="absolute top-2 right-2 bg-white px-2 py-1 rounded-lg shadow text-xs font-bold flex items-center gap-1">
+                                <span class="text-yellow-500 material-icons-round text-sm">star</span> ${item.rating}
+                            </div>
+                        </div>
+                        <div class="p-4">
+                            <h4 class="font-bold text-lg text-gray-800 mb-1 truncate">${item.name}</h4>
+                            <div class="flex justify-between items-center mt-3">
+                                <span class="text-xl font-bold text-brand-red">₹${item.price}</span>
+                                <button onclick="addToCart('${item.id}', '${item.name}', '${item.image}', ${item.price})" class="bg-brand-red text-white p-2 rounded-full shadow-lg hover:bg-black transition active:scale-95">
+                                    <span class="material-icons-round text-sm">add</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+
+                if (grid.innerHTML === '') grid.innerHTML = '<p class="col-span-full text-center text-gray-500 py-10">No items found.</p>';
+
+                // Expose items globally for addToCart if needed, or pass params directly
+                window.currentItems = items;
+            }
+
+            window.addToCart = function (id, name, image, price) {
+                if (cart[id]) {
+                    cart[id].quantity++;
+                } else {
+                    cart[id] = { id, name, image, price, quantity: 1 };
+                }
+                saveCart();
+                showToast('Added to cart!');
+            }
+
+            window.removeFromCart = function (id) {
+                delete cart[id];
                 saveCart();
             }
-        }
 
-        function updateCartUI() {
-            const cartItems = document.getElementById('cartItems');
-            const cartTotal = document.getElementById('cartTotal');
-            const cartCount = document.getElementById('cartCount');
+            window.updateQuantity = function (id, change) {
+                if (cart[id].quantity + change <= 0) {
+                    removeFromCart(id);
+                } else {
+                    cart[id].quantity += change;
+                    saveCart();
+                }
+            }
 
-            let total = 0;
-            let count = 0;
+            window.updateCartUI = function () {
+                const cartItems = document.getElementById('cartItems');
+                const cartTotal = document.getElementById('cartTotal');
+                const cartCount = document.getElementById('cartCount');
 
-            const entries = Object.values(cart);
+                let total = 0;
+                let count = 0;
+                const entries = Object.values(cart);
 
-            if (entries.length === 0) {
-                cartItems.innerHTML = '<div class="text-center text-gray-400 py-10 flex flex-col items-center"><span class="material-icons-round text-4xl mb-2">remove_shopping_cart</span>Empty Cart</div>';
-            } else {
-                cartItems.innerHTML = entries.map(item => {
-                    total += item.price * item.quantity;
-                    count += item.quantity;
-                    return `
-                    <div class="flex items-center gap-3 bg-white p-3 rounded-xl shadow-sm border border-gray-100">
-                        <img src="${item.image}" class="w-16 h-16 rounded-lg object-cover">
-                        <div class="flex-1">
-                            <h4 class="font-bold text-sm text-gray-800">${item.name}</h4>
-                            <p class="text-brand-red font-bold text-xs">₹${item.price}</p>
+                if (entries.length === 0) {
+                    cartItems.innerHTML = '<div class="text-center text-gray-400 py-10 flex flex-col items-center"><span class="material-icons-round text-4xl mb-2">remove_shopping_cart</span>Empty Cart</div>';
+                } else {
+                    cartItems.innerHTML = entries.map(item => {
+                        total += item.price * item.quantity;
+                        count += item.quantity;
+                        return `
+                        <div class="flex items-center gap-3 bg-white p-3 rounded-xl shadow-sm border border-gray-100">
+                            <img src="${item.image}" class="w-16 h-16 rounded-lg object-cover">
+                            <div class="flex-1">
+                                <h4 class="font-bold text-sm text-gray-800">${item.name}</h4>
+                                <p class="text-brand-red font-bold text-xs">₹${item.price}</p>
+                            </div>
+                            <div class="flex items-center gap-2 bg-gray-100 rounded-lg p-1">
+                                <button onclick="updateQuantity('${item.id}', -1)" class="w-6 h-6 flex items-center justify-center bg-white rounded shadow text-gray-600 hover:text-green-500">-</button>
+                                <span class="text-xs font-bold w-4 text-center">${item.quantity}</span>
+                                <button onclick="updateQuantity('${item.id}', 1)" class="w-6 h-6 flex items-center justify-center bg-white rounded shadow text-gray-600 hover:text-green-500">+</button>
+                            </div>
                         </div>
-                        <div class="flex items-center gap-2 bg-gray-100 rounded-lg p-1">
-                            <button onclick="updateQuantity(${item.id}, -1)" class="w-6 h-6 flex items-center justify-center bg-white rounded shadow text-gray-600 hover:text-red-500">-</button>
-                            <span class="text-xs font-bold w-4 text-center">${item.quantity}</span>
-                            <button onclick="updateQuantity(${item.id}, 1)" class="w-6 h-6 flex items-center justify-center bg-white rounded shadow text-gray-600 hover:text-green-500">+</button>
-                        </div>
-                    </div>
-                `}).join('');
+                    `}).join('');
+                }
+
+                cartTotal.innerText = '₹' + total.toFixed(2);
+                cartCount.innerText = count;
+                cartCount.classList.toggle('hidden', count === 0);
             }
 
-            cartTotal.innerText = formatCurrency(total);
-            cartCount.innerText = count;
-            cartCount.classList.toggle('hidden', count === 0);
-        }
+            // Order Logic (Firestore)
+            window.placeOrder = async function () {
+                const entries = Object.values(cart);
+                if (entries.length === 0) {
+                    showToast('Cart is empty!');
+                    return;
+                }
 
-        function toggleCart() {
-            const modal = document.getElementById('cartModal');
-            const content = document.getElementById('cartContent');
+                const newOrder = {
+                    client: currentUser.uid,
+                    clientEmail: currentUser.email,
+                    items: entries,
+                    total: entries.reduce((sum, item) => sum + (item.price * item.quantity), 0),
+                    status: 'Order Placed',
+                    timestamp: new Date().toISOString()
+                };
 
-            if (modal.classList.contains('hidden')) {
-                modal.classList.remove('hidden');
-                setTimeout(() => content.classList.remove('translate-x-full'), 10);
-            } else {
-                content.classList.add('translate-x-full');
-                setTimeout(() => modal.classList.add('hidden'), 300);
-            }
-        }
+                try {
+                    await placeOrder(newOrder);
 
-        function placeOrder() {
-            const entries = Object.values(cart);
-            if (entries.length === 0) {
-                showToast('Cart is empty!');
-                return;
-            }
+                    cart = {};
+                    saveCart();
+                    toggleCart(); // Ensure toggleCart is available
+                    showToast('Order Placed Successfully!');
+                    switchView('track');
+                    await renderOrders();
 
-            const orders = getData('orders') || [];
-            const newOrder = {
-                id: Date.now(),
-                client: user.username, // Using 'client' as per data model, though variable is user.username
-                items: entries,
-                total: entries.reduce((sum, item) => sum + (item.price * item.quantity), 0),
-                status: 'Order Placed',
-                timestamp: new Date().toISOString()
-            };
-
-            orders.push(newOrder);
-            setData('orders', orders);
-
-            // Clear cart
-            cart = {};
-            saveCart();
-            toggleCart();
-            showToast('Order Placed Successfully!');
-
-            // Switch to Track Order view automatically
-            switchView('track');
-            renderOrders();
-        }
-
-        function renderOrders() {
-            const orders = getData('orders') || [];
-            const myOrders = orders.filter(o => o.client === user.username).reverse();
-
-            // Separate active and past orders
-            const activeOrders = myOrders.filter(o => o.status !== 'Delivered');
-            const pastOrders = myOrders.filter(o => o.status === 'Delivered');
-
-            const trackContainer = document.getElementById('trackOrderList');
-            const historyContainer = document.getElementById('ordersList');
-
-            // Render Track Orders (Active)
-            if (activeOrders.length === 0) {
-                trackContainer.innerHTML = '<div class="text-center text-gray-400 py-8 bg-white rounded-xl shadow-sm">No active orders to track.</div>';
-            } else {
-                trackContainer.innerHTML = activeOrders.map(order => createOrderCard(order)).join('');
+                } catch (e) {
+                    console.error(e);
+                    showToast('Error placing order');
+                }
             }
 
-            // Render Order History (Delivered)
-            if (pastOrders.length === 0) {
-                historyContainer.innerHTML = '<div class="text-center text-gray-400 py-8 bg-white rounded-xl shadow-sm">No past orders.</div>';
-            } else {
-                historyContainer.innerHTML = pastOrders.map(order => createOrderCard(order)).join('');
+            window.renderOrders = async function () {
+                const orders = await getOrders(currentUser.uid);
+                // Filter client side for now as getOrders returns all
+                // Ideally update getOrders to accept query
+                // Temporarily filter by client ID match
+                const myOrders = orders.filter(o => o.client === currentUser.uid).reverse();
+
+                const activeOrders = myOrders.filter(o => o.status !== 'Delivered');
+                const pastOrders = myOrders.filter(o => o.status === 'Delivered');
+
+                const trackContainer = document.getElementById('trackOrderList');
+                const historyContainer = document.getElementById('ordersList');
+
+                if (activeOrders.length === 0) {
+                    trackContainer.innerHTML = '<div class="text-center text-gray-400 py-8 bg-white rounded-xl shadow-sm">No active orders to track.</div>';
+                } else {
+                    trackContainer.innerHTML = activeOrders.map(order => createOrderCard(order)).join('');
+                }
+
+                if (pastOrders.length === 0) {
+                    historyContainer.innerHTML = '<div class="text-center text-gray-400 py-8 bg-white rounded-xl shadow-sm">No past orders.</div>';
+                } else {
+                    historyContainer.innerHTML = pastOrders.map(order => createOrderCard(order)).join('');
+                }
             }
-        }
+        })();
 
-        function createOrderCard(order) {
-            return `
-                <div class="bg-white p-5 rounded-2xl shadow hover:shadow-md transition border-l-4 ${getStatusColor(order.status)}">
-                    <div class="flex justify-between items-start mb-2">
-                        <div>
-                            <span class="text-xs text-gray-500 font-mono">#${order.id.toString().slice(-6)}</span>
-                            <h4 class="font-bold text-gray-800">${new Date(order.timestamp).toLocaleString()}</h4>
-                        </div>
-                        <span class="px-3 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-600 border border-gray-200 uppercase tracking-wide">
-                            ${order.status}
-                        </span>
-                    </div>
-                    <div class="text-sm text-gray-600 mb-2">
-                        ${order.items.map(i => `${i.quantity}x ${i.name}`).join(', ')}
-                    </div>
-                    <div class="text-right font-bold text-brand-red text-lg">
-                        ${formatCurrency(order.total)}
-                    </div>
-                </div>
-            `;
-        }
-
-        function getStatusColor(status) {
-            switch (status) {
-                case 'Order Placed': return 'border-blue-500';
-                case 'Order Accepted': return 'border-indigo-500';
-                case 'Being Cooked': return 'border-yellow-500';
-                case 'Order Ready': return 'border-orange-500';
-                case 'Out for Delivery': return 'border-purple-500';
-                case 'Delivered': return 'border-green-500';
-                default: return 'border-gray-300';
+        // Make helpers available for HTML onclicks
+        // Note: HTML/CSS/JS "vanilla" separation makes module scoping tricky for inline handlers
+        // We attach to window to make them globally accessible
+        window.renderMenu = () => { /* re-trigger if search changes */
+            // We need to access the internal async function, careful with scoping.
+            // For simplicity, we redefine a wrapper or just let the input event bubble.
+            // Best to just re-attach the event listener or re-define
+            const searchInput = document.getElementById('searchInput');
+            if (searchInput) {
+                // The internal renderMenu is attached to window in the IIFE
             }
-        }
-
-        function switchView(viewName) {
-            const homeView = document.getElementById('homeView');
-            const trackView = document.getElementById('trackOrderView');
-            const ordersView = document.getElementById('ordersView');
-
-            const navHome = document.getElementById('nav-home');
-            const navTrack = document.getElementById('nav-track');
-            const navOrders = document.getElementById('nav-orders');
-
-            // Reset all
-            homeView.classList.add('hidden');
-            trackView.classList.add('hidden');
-            ordersView.classList.add('hidden');
-
-            navHome.classList.remove('text-brand-red');
-            navHome.classList.add('text-gray-500');
-            navTrack.classList.remove('text-brand-red');
-            navTrack.classList.add('text-gray-500');
-            navOrders.classList.remove('text-brand-red');
-            navOrders.classList.add('text-gray-500');
-
-            if (viewName === 'home') {
-                homeView.classList.remove('hidden');
-                navHome.classList.add('text-brand-red');
-                navHome.classList.remove('text-gray-500');
-            } else if (viewName === 'track') {
-                trackView.classList.remove('hidden');
-                navTrack.classList.add('text-brand-red');
-                navTrack.classList.remove('text-gray-500');
-                renderOrders();
-            } else if (viewName === 'orders') {
-                ordersView.classList.remove('hidden');
-                navOrders.classList.add('text-brand-red');
-                navOrders.classList.remove('text-gray-500');
-                renderOrders();
-            }
-        }
-
-        // Init
-        loadCart();
-        renderMenu();
-        renderOrders();
-
-        // Auto refresh orders every 5 seconds
-        setInterval(renderOrders, 5000);
+        }; 
+    </script>
 
     </script>
 </body>

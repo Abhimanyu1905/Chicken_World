@@ -50,83 +50,85 @@
 
     <script src="script.js"></script>
     <script>
-        checkSession('shopkeeper');
+        (async function(){
+            if (window.firebaseService) await window.firebaseService.init();
 
-        function renderOrders() {
-            const orders = getData('orders') || [];
-            // Sort by new first
-            const sortedOrders = orders.reverse();
-            const container = document.getElementById('ordersList');
+            checkSession('shopkeeper');
 
-            if (sortedOrders.length === 0) {
-                container.innerHTML = '<div class="col-span-full text-center text-gray-400 py-10">No orders yet.</div>';
-                return;
-            }
+            window.renderOrders = function() {
+                const orders = getData('orders') || [];
+                const sortedOrders = orders.reverse();
+                const container = document.getElementById('ordersList');
 
-            container.innerHTML = sortedOrders.map(order => `
-                <div class="bg-white p-6 rounded-2xl shadow-md border-t-4 ${getStatusColor(order.status)} hover:shadow-lg transition-shadow">
-                    <div class="flex justify-between items-center mb-4">
-                        <span class="font-bold text-lg text-gray-800">Order #${order.id.toString().slice(-4)}</span>
-                        <span class="text-xs text-gray-500">${new Date(order.timestamp).toLocaleTimeString()}</span>
-                    </div>
+                if (sortedOrders.length === 0) {
+                    container.innerHTML = '<div class="col-span-full text-center text-gray-400 py-10">No orders yet.</div>';
+                    return;
+                }
 
-                    <div class="mb-4">
-                        <p class="text-sm font-bold text-gray-600 mb-1">Customer: <span class="text-black">${order.client}</span></p>
-                        <div class="bg-gray-50 p-3 rounded-lg text-sm text-gray-700 space-y-1">
-                            ${order.items.map(item => `
-                                <div class="flex justify-between">
-                                    <span>${item.quantity}x ${item.name}</span>
-                                    <span class="font-bold">₹${item.price * item.quantity}</span>
-                                </div>
-                            `).join('')}
+                container.innerHTML = sortedOrders.map(order => `
+                    <div class="bg-white p-6 rounded-2xl shadow-md border-t-4 ${getStatusColor(order.status)} hover:shadow-lg transition-shadow">
+                        <div class="flex justify-between items-center mb-4">
+                            <span class="font-bold text-lg text-gray-800">Order #${order.id.toString().slice(-4)}</span>
+                            <span class="text-xs text-gray-500">${new Date(order.timestamp).toLocaleTimeString()}</span>
+                        </div>
+
+                        <div class="mb-4">
+                            <p class="text-sm font-bold text-gray-600 mb-1">Customer: <span class="text-black">${order.client}</span></p>
+                            <div class="bg-gray-50 p-3 rounded-lg text-sm text-gray-700 space-y-1">
+                                ${order.items.map(item => `
+                                    <div class="flex justify-between">
+                                        <span>${item.quantity}x ${item.name}</span>
+                                        <span class="font-bold">₹${item.price * item.quantity}</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        <div class="flex justify-between items-center border-t pt-4">
+                            <span class="text-xl font-bold text-brand-red">₹${order.total}</span>
+                            
+                            <select onchange="updateStatus(${order.id}, this.value)" class="bg-gray-100 border border-gray-200 text-gray-700 py-1 px-3 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-red">
+                                ${generateStatusOptions(order.status)}
+                            </select>
                         </div>
                     </div>
-
-                    <div class="flex justify-between items-center border-t pt-4">
-                        <span class="text-xl font-bold text-brand-red">₹${order.total}</span>
-                        
-                        <select onchange="updateStatus(${order.id}, this.value)" class="bg-gray-100 border border-gray-200 text-gray-700 py-1 px-3 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-red">
-                            ${generateStatusOptions(order.status)}
-                        </select>
-                    </div>
-                </div>
-            `).join('');
-        }
-
-        function generateStatusOptions(currentStatus) {
-            const statuses = ['Order Placed', 'Order Accepted', 'Being Cooked', 'Order Ready', 'Out for Delivery', 'Delivered'];
-            return statuses.map(status =>
-                `<option value="${status}" ${status === currentStatus ? 'selected' : ''}>${status}</option>`
-            ).join('');
-        }
-
-        function updateStatus(orderId, newStatus) {
-            const orders = getData('orders');
-            const orderIndex = orders.findIndex(o => o.id === orderId);
-
-            if (orderIndex > -1) {
-                orders[orderIndex].status = newStatus;
-                setData('orders', orders);
-                showToast(`Order #${orderId.toString().slice(-4)} updated to ${newStatus}`);
-                renderOrders();
+                `).join('');
             }
-        }
 
-        function getStatusColor(status) {
-            switch (status) {
-                case 'Order Placed': return 'border-blue-500';
-                case 'Order Accepted': return 'border-indigo-500';
-                case 'Being Cooked': return 'border-yellow-500';
-                case 'Order Ready': return 'border-orange-500';
-                case 'Out for Delivery': return 'border-purple-500';
-                case 'Delivered': return 'border-green-500';
-                default: return 'border-gray-300';
+            window.generateStatusOptions = function(currentStatus) {
+                const statuses = ['Order Placed', 'Order Accepted', 'Being Cooked', 'Order Ready', 'Out for Delivery', 'Delivered'];
+                return statuses.map(status =>
+                    `<option value="${status}" ${status === currentStatus ? 'selected' : ''}>${status}</option>`
+                ).join('');
             }
-        }
 
-        renderOrders();
-        // Auto refresh
-        setInterval(renderOrders, 5000);
+            window.updateStatus = function(orderId, newStatus) {
+                const orders = getData('orders');
+                const orderIndex = orders.findIndex(o => o.id === orderId);
+
+                if (orderIndex > -1) {
+                    orders[orderIndex].status = newStatus;
+                    setData('orders', orders);
+                    showToast(`Order #${orderId.toString().slice(-4)} updated to ${newStatus}`);
+                    renderOrders();
+                }
+            }
+
+            window.getStatusColor = function(status) {
+                switch (status) {
+                    case 'Order Placed': return 'border-blue-500';
+                    case 'Order Accepted': return 'border-indigo-500';
+                    case 'Being Cooked': return 'border-yellow-500';
+                    case 'Order Ready': return 'border-orange-500';
+                    case 'Out for Delivery': return 'border-purple-500';
+                    case 'Delivered': return 'border-green-500';
+                    default: return 'border-gray-300';
+                }
+            }
+
+            renderOrders();
+            setInterval(renderOrders, 5000);
+        })();
 
     </script>
 </body>
